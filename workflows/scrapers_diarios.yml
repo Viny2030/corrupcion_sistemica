@@ -1,0 +1,60 @@
+name: Scrapers diarios — Mapa de Transparencia
+
+# Corre el pipeline completo (ingesta de fuentes reales + analítica) una
+# vez por día y deja `dashboard/data.json` actualizado y commiteado en el
+# repo, para que el dashboard estático siempre muestre el último dato real
+# sin depender de que el servicio de Railway esté levantado en ese momento.
+#
+# Cron en UTC. 09:00 UTC = 06:00 ART (Argentina, UTC-3). Ajustá el horario
+# según lo que necesites; también se puede disparar a mano desde la pestaña
+# "Actions" del repo (workflow_dispatch).
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  correr-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Instalar navegador de Playwright (para BORA/HCDN/Senado/SAIJ)
+        run: playwright install --with-deps chromium
+
+      - name: Correr el pipeline (ingesta real + analítica)
+        env:
+          PG_HOST: ${{ secrets.PG_HOST }}
+          PG_PORT: ${{ secrets.PG_PORT }}
+          PG_DB: ${{ secrets.PG_DB }}
+          PG_USER: ${{ secrets.PG_USER }}
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+        run: python pipeline.py
+
+      - name: Correr tests (fórmulas + parsers de scrapers)
+        run: pytest -q
+
+      - name: Commitear dashboard/data.json actualizado
+        run: |
+          git config user.name "mapa-transparencia-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add dashboard/data.json
+          git diff --cached --quiet && echo "Sin cambios reales, no se commitea" || \
+            git commit -m "chore: actualización diaria de indicadores reales ($(date -u +%Y-%m-%d))"
+          git push
