@@ -1,0 +1,22 @@
+
+requests>=2.31.0
+pandas>=2.1.0
+numpy>=1.26.0
+networkx>=3.2
+python-louvain>=0.16
+rapidfuzz>=3.6.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.25
+python-dotenv>=1.0.1
+beautifulsoup4>=4.12.3
+lxml>=5.1.0
+spacy>=3.7.4
+scikit-learn>=1.4.0
+pytest>=8.0.0
+
+# Servicio autónomo (API + scheduler) para despliegue en Railway
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+apscheduler>=3.10.4
+python-multipart>=0.0.9
+pydantic>=2.8.0
