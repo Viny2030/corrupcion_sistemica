@@ -1,0 +1,23 @@
+<!--
+Fixture de prueba para tests/test_scrapers.py — NO es una descarga real de
+boletinoficial.gob.ar. Es un HTML mínimo, escrito a mano, que reproduce la
+estructura que ConectorBORA._extraer_con_selectores_conocidos() espera
+encontrar, para verificar que el parser funciona correctamente. Calibrar
+contra el DOM real con scripts/inspeccionar_selectores.py.
+-->
+<html>
+<body>
+  <div class="resultado-aviso card-aviso">
+    <span class="titulo">Adjudicación Licitación Pública 45/2026</span>
+    <span class="fecha">05/08/2026</span>
+    <span class="organismo">Ministerio de Obras Públicas</span>
+    <a href="/detalleAviso/999888">Ver detalle</a>
+  </div>
+  <div class="resultado-aviso card-aviso">
+    <span class="titulo">Decreto 1234/2026</span>
+    <span class="fecha">04/08/2026</span>
+    <span class="organismo">Jefatura de Gabinete</span>
+    <a href="/detalleAviso/999777">Ver detalle</a>
+  </div>
+</body>
+</html>
