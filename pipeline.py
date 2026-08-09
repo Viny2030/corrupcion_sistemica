@@ -1,4 +1,4 @@
-"""Orquestador del Mapa de Transparencia.
+"""Orquestador del monitor de Corrupción Sistémica.
 
 Corre la ingesta de fuentes reales disponibles y la batería analítica de
 las 4 capas, y deja todo consolidado en `dashboard/data.json` para que el
@@ -23,12 +23,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from analytics import finanzas, sna
+from analytics import finanzas, scoring, sna
 from ingestion.wgi_worldbank import ConectorWGI
 from config.settings import SETTINGS
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("mapa_transparencia.pipeline")
+logger = logging.getLogger("corrupcion_sistemica.pipeline")
 
 DIR_DASHBOARD = Path(__file__).parent / "dashboard"
 
@@ -110,14 +110,15 @@ def ejecutar_pipeline(
     persistir: bool = True,
 ) -> dict:
     """Punto de entrada reusable: lo llaman tanto el CLI (`main`) como la
-    API (`api/main.py`) y el worker programado (`worker.py`). Devuelve el
-    dict de salida y, si `persistir=True`, lo escribe además en
-    `dashboard/data.json` (para que el dashboard estático lo lea sin
+    API (`api/main.py`) y el cron diario (GitHub Actions / Railway Cron).
+    Devuelve el dict de salida y, si `persistir=True`, lo escribe además
+    en `dashboard/data.json` (para que el dashboard estático lo lea sin
     necesidad de golpear la API)."""
     salida = {
-        "generado_en": pd.Timestamp.utcnow().isoformat(),
+        "generado_en": pd.Timestamp.now("UTC").isoformat(),
         "indicadores_macro": ingerir_indicadores_macro(),
         "procurement": analizar_procurement(path_ofertas, path_licitaciones, path_adendas),
+        "reglas_scoring": scoring.explicar_reglas().to_dict("records"),
     }
 
     if persistir:
@@ -130,7 +131,7 @@ def ejecutar_pipeline(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Pipeline Mapa de Transparencia")
+    parser = argparse.ArgumentParser(description="Pipeline del monitor de Corrupción Sistémica")
     parser.add_argument("--ofertas", help="CSV real de ofertas por licitación (empresa_id, licitacion_id, resultado, ...)")
     parser.add_argument("--licitaciones", help="CSV real de licitaciones/adjudicaciones")
     parser.add_argument("--adendas", help="CSV real de adendas/ampliaciones de monto")

@@ -15,7 +15,7 @@ def test_hhi_monopolio_da_10000():
     )
     resultado = finanzas.hhi_por_organismo(licitaciones)
     assert resultado.iloc[0]["hhi"] == 10000.0
-    assert resultado.iloc[0]["alta_concentracion"] is True
+    assert resultado.iloc[0]["alta_concentracion"] == True  # noqa: E712 — viene como np.bool_, no bool
 
 
 def test_hhi_competencia_perfecta_dos_iguales_da_5000():
