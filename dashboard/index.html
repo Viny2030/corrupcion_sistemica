@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Mapa de Transparencia — Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#141b2e; --panel2:#1b2438; --text:#e8ecf7;
+    --muted:#8b96b3; --accent:#4fd1c5; --warn:#f6ad55; --danger:#fc8181;
+    --border:#26314d;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);}
+  header{padding:28px 32px 16px;border-bottom:1px solid var(--border);}
+  header h1{margin:0 0 4px;font-size:22px;}
+  header p{margin:0;color:var(--muted);font-size:13px;}
+  main{padding:24px 32px;display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;}
+  .card h2{margin:0 0 12px;font-size:15px;color:var(--accent);}
+  .kpi-row{display:flex;gap:16px;flex-wrap:wrap;}
+  .kpi{flex:1;min-width:120px;background:var(--panel2);border-radius:10px;padding:14px;text-align:center;}
+  .kpi .valor{font-size:28px;font-weight:700;}
+  .kpi .label{font-size:11px;color:var(--muted);margin-top:4px;}
+  .kpi .delta{font-size:12px;margin-top:4px;}
+  .delta.peor{color:var(--danger);} .delta.mejor{color:var(--accent);}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);}
+  th{color:var(--muted);font-weight:600;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;}
+  .badge.pendiente{background:#3a2a12;color:var(--warn);}
+  .vacio{color:var(--muted);font-size:13px;line-height:1.6;padding:8px 0;}
+  .vacio code{background:var(--panel2);padding:2px 6px;border-radius:4px;color:var(--accent);}
+  .fuente{color:var(--muted);font-size:11px;margin-top:10px;}
+  .full{grid-column:1/-1;}
+  canvas{max-height:220px;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Mapa de Transparencia — Módulo de Corrupción Sistémica</h1>
+  <p>Dashboard interactivo sobre datos reales (CPI / WGI) y motor analítico de las 4 capas (SNA, Finanzas, Conductual, Judicial). Regenerar con <code>python pipeline.py</code>.</p>
+</header>
+
+<main id="app"></main>
+
+<script>
+// ---------------------------------------------------------------------------
+// Datos: se intenta leer dashboard/data.json (regenerado por pipeline.py).
+// Si el archivo no está disponible (ej. abierto como file:// sin servidor),
+// se usa el snapshot embebido abajo, que contiene los MISMOS valores reales
+// verificados manualmente (ver README > Fuentes) — nunca datos simulados.
+// ---------------------------------------------------------------------------
+const DATA_EMBEBIDA = {
+  "generado_en": "2026-08-09T00:00:00Z",
+  "indicadores_macro": [
+    { "pais_iso3": "ARG", "anio": 2024, "indicador": "CPI", "valor": 37, "fuente": "Transparency International, CPI 2024" },
+    { "pais_iso3": "ARG", "anio": 2025, "indicador": "CPI", "valor": 36, "fuente": "Transparency International, CPI 2025" },
+    { "pais_iso3": "ARG", "anio": 2022, "indicador": "WGI_CONTROL_CORRUPCION", "valor": -0.45, "fuente": "World Bank WGI" },
+    { "pais_iso3": "ARG", "anio": 2023, "indicador": "WGI_CONTROL_CORRUPCION", "valor": -0.36, "fuente": "World Bank WGI" }
+  ],
+  "procurement": {
+    "co_presentismo": { "disponible": false, "datos": [] },
+    "asimetria_victorias": { "disponible": false, "datos": [] },
+    "hhi_por_organismo": { "disponible": false, "datos": [] },
+    "low_balling": { "disponible": false, "datos": [] }
+  },
+  "reglas_scoring": [
+    { "regla": "HHI_ELEVADO", "descripcion": "Alta concentración presupuestaria en el organismo (HHI > 2500)", "peso_maximo": 30.0 },
+    { "regla": "ADENDAS_REPETIDAS", "descripcion": "Low-balling ratio alto: sobrecosto vía adendas", "peso_maximo": 25.0 },
+    { "regla": "COBRO_VELOZ_TGN", "descripcion": "Priorización de pago frente al promedio del organismo", "peso_maximo": 20.0 },
+    { "regla": "ALTERNANCIA_SOSPECHOSA", "descripcion": "Alternancia de victorias con co-presentismo alto", "peso_maximo": 15.0 },
+    { "regla": "COMPLIANCE_DE_PAPEL", "descripcion": "Programa de integridad sin efectividad real verificada", "peso_maximo": 10.0 }
+  ]
+};
+
+async function cargarDatos() {
+  try {
+    const resp = await fetch('./data.json', { cache: 'no-store' });
+    if (!resp.ok) throw new Error('sin data.json servido');
+    return await resp.json();
+  } catch (e) {
+    return DATA_EMBEBIDA;
+  }
+}
+
+function porIndicador(macro, nombre) {
+  return macro.filter(d => d.indicador === nombre).sort((a, b) => a.anio - b.anio);
+}
+
+function render(data) {
+  const app = document.getElementById('app');
+  const macro = data.indicadores_macro || [];
+  const cpi = porIndicador(macro, 'CPI');
+  const wgi = porIndicador(macro, 'WGI_CONTROL_CORRUPCION');
+
+  const cpiUltimo = cpi[cpi.length - 1];
+  const cpiPrevio = cpi[cpi.length - 2];
+  const wgiUltimo = wgi[wgi.length - 1];
+  const wgiPrevio = wgi[wgi.length - 2];
+
+  const deltaCpi = cpiPrevio ? (cpiUltimo.valor - cpiPrevio.valor) : null;
+  const deltaWgi = wgiPrevio ? (wgiUltimo.valor - wgiPrevio.valor) : null;
+
+  app.innerHTML = `
+    <div class="card">
+      <h2>Corruption Perceptions Index (CPI) — Argentina</h2>
+      <div class="kpi-row">
+        <div class="kpi">
+          <div class="valor">${cpiUltimo ? cpiUltimo.valor : '—'}</div>
+          <div class="label">CPI ${cpiUltimo ? cpiUltimo.anio : ''} / 100</div>
+          ${deltaCpi !== null ? `<div class="delta ${deltaCpi < 0 ? 'peor' : 'mejor'}">${deltaCpi > 0 ? '+' : ''}${deltaCpi} vs ${cpiPrevio.anio}</div>` : ''}
+        </div>
+      </div>
+      <canvas id="chartCpi"></canvas>
+      <div class="fuente">Fuente: ${cpiUltimo ? cpiUltimo.fuente : 'Transparency International'}</div>
+    </div>
+
+    <div class="card">
+      <h2>WGI — Control of Corruption (Estimate) — Argentina</h2>
+      <div class="kpi-row">
+        <div class="kpi">
+          <div class="valor">${wgiUltimo ? wgiUltimo.valor.toFixed(2) : '—'}</div>
+          <div class="label">Estimate ${wgiUltimo ? wgiUltimo.anio : ''} (rango -2.5 a 2.5)</div>
+          ${deltaWgi !== null ? `<div class="delta ${deltaWgi < 0 ? 'peor' : 'mejor'}">${deltaWgi > 0 ? '+' : ''}${deltaWgi.toFixed(2)} vs ${wgiPrevio.anio}</div>` : ''}
+        </div>
+      </div>
+      <canvas id="chartWgi"></canvas>
+      <div class="fuente">Fuente: ${wgiUltimo ? wgiUltimo.fuente : 'World Bank WGI'}</div>
+    </div>
+
+    <div class="card full">
+      <h2>Motor de Scoring de Riesgo — Reglas y Explicabilidad (XAI)</h2>
+      <table>
+        <thead><tr><th>Regla</th><th>Descripción</th><th>Peso máx.</th></tr></thead>
+        <tbody>
+          ${(data.reglas_scoring || []).map(r => `
+            <tr><td>${r.regla}</td><td>${r.descripcion}</td><td>${r.peso_maximo}</td></tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <div class="fuente">Cada alerta muestra su "Audit Card": el desglose exacto de qué reglas y sobre qué datos reales se activó (ver analytics/scoring.py).</div>
+    </div>
+
+    ${renderPanelProcurement('Capa 1 — Co-presentismo / Rotación de ofertas', data.procurement.co_presentismo, '--ofertas ofertas.csv')}
+    ${renderPanelProcurement('Capa 1 — Asimetría de victorias', data.procurement.asimetria_victorias, '--ofertas ofertas.csv')}
+    ${renderPanelProcurement('Capa 2 — HHI por organismo', data.procurement.hhi_por_organismo, '--licitaciones licitaciones.csv')}
+    ${renderPanelProcurement('Capa 2 — Low-balling index (adendas)', data.procurement.low_balling, '--licitaciones licitaciones.csv --adendas adendas.csv')}
+  `;
+
+  new Chart(document.getElementById('chartCpi'), {
+    type: 'bar',
+    data: {
+      labels: cpi.map(d => d.anio),
+      datasets: [{ label: 'CPI', data: cpi.map(d => d.valor), backgroundColor: '#4fd1c5' }]
+    },
+    options: { plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100, ticks: { color: '#8b96b3' } }, x: { ticks: { color: '#8b96b3' } } } }
+  });
+
+  new Chart(document.getElementById('chartWgi'), {
+    type: 'bar',
+    data: {
+      labels: wgi.map(d => d.anio),
+      datasets: [{ label: 'WGI Control of Corruption', data: wgi.map(d => d.valor), backgroundColor: '#f6ad55' }]
+    },
+    options: { plugins: { legend: { display: false } }, scales: { y: { min: -1, max: 1, ticks: { color: '#8b96b3' } }, x: { ticks: { color: '#8b96b3' } } } }
+  });
+}
+
+function renderPanelProcurement(titulo, bloque, comando) {
+  if (bloque && bloque.disponible && bloque.datos && bloque.datos.length) {
+    const filas = bloque.datos.slice(0, 15);
+    const columnas = Object.keys(filas[0]);
+    return `
+      <div class="card">
+        <h2>${titulo}</h2>
+        <table>
+          <thead><tr>${columnas.map(c => `<th>${c}</th>`).join('')}</tr></thead>
+          <tbody>${filas.map(f => `<tr>${columnas.map(c => `<td>${f[c] ?? ''}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+  }
+  return `
+    <div class="card">
+      <h2>${titulo} <span class="badge pendiente">esperando datos reales</span></h2>
+      <div class="vacio">
+        Este panel se completa con tus propios datos reales de contrataciones
+        (no se simula). Corré:<br><br>
+        <code>python pipeline.py ${comando}</code><br><br>
+        y volvé a abrir este dashboard.
+      </div>
+    </div>`;
+}
+
+cargarDatos().then(render);
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "generado_en": "2026-08-09T00:00:00Z",
+  "notas": "Indicadores macro (CPI/WGI) con valores reales verificados manualmente (ver README, sección Fuentes). Los bloques de procurement (SNA/HHI/low-balling) requieren que el usuario provea sus propios datasets reales via --ofertas/--licitaciones/--adendas; por eso figuran como 'disponible: false' en este archivo de ejemplo, en vez de mostrar datos inventados.",
+  "indicadores_macro": [
+    { "pais_iso3": "ARG", "anio": 2024, "indicador": "CPI", "valor": 37, "fuente": "Transparency International, Corruption Perceptions Index 2024" },
+    { "pais_iso3": "ARG", "anio": 2025, "indicador": "CPI", "valor": 36, "fuente": "Transparency International, Corruption Perceptions Index 2025" },
+    { "pais_iso3": "ARG", "anio": 2022, "indicador": "WGI_CONTROL_CORRUPCION", "valor": -0.45, "fuente": "World Bank, Worldwide Governance Indicators" },
+    { "pais_iso3": "ARG", "anio": 2023, "indicador": "WGI_CONTROL_CORRUPCION", "valor": -0.36, "fuente": "World Bank, Worldwide Governance Indicators" }
+  ],
+  "procurement": {
+    "co_presentismo": { "disponible": false, "datos": [] },
+    "asimetria_victorias": { "disponible": false, "datos": [] },
+    "hhi_por_organismo": { "disponible": false, "datos": [] },
+    "low_balling": { "disponible": false, "datos": [] }
+  },
+  "reglas_scoring": [
+    { "regla": "HHI_ELEVADO", "descripcion": "Alta concentración presupuestaria en el organismo (HHI > 2500)", "peso_maximo": 30.0 },
+    { "regla": "ADENDAS_REPETIDAS", "descripcion": "Low-balling ratio alto: sobrecosto significativo vía adendas", "peso_maximo": 25.0 },
+    { "regla": "COBRO_VELOZ_TGN", "descripcion": "Priorización de pago frente al promedio del organismo", "peso_maximo": 20.0 },
+    { "regla": "ALTERNANCIA_SOSPECHOSA", "descripcion": "Alternancia de victorias con co-presentismo alto (posible cobertura)", "peso_maximo": 15.0 },
+    { "regla": "COMPLIANCE_DE_PAPEL", "descripcion": "Programa de integridad declarado sin efectividad real verificada", "peso_maximo": 10.0 }
+  ]
+}
