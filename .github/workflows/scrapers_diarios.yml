@@ -38,6 +38,9 @@ jobs:
       - name: Instalar navegador de Playwright (para BORA/HCDN/Senado/SAIJ)
         run: playwright install --with-deps chromium
 
+      - name: Instalar modelo de spaCy en español (NER de services/nlp_service.py)
+        run: python -m spacy download es_core_news_sm
+
       - name: Correr el pipeline (ingesta real + analítica)
         env:
           PG_HOST: ${{ secrets.PG_HOST }}
