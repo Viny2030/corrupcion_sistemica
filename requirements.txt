@@ -3,6 +3,7 @@ requests>=2.31.0
 pandas>=2.1.0
 numpy>=1.26.0
 networkx>=3.2
+scipy>=1.11.0
 python-louvain>=0.16
 rapidfuzz>=3.6.0
 psycopg2-binary>=2.9.9
@@ -13,6 +14,7 @@ lxml>=5.1.0
 spacy>=3.7.4
 scikit-learn>=1.4.0
 pytest>=8.0.0
+httpx>=0.27.0
 
 # Servicio autónomo (API + scheduler) para despliegue en Railway
 fastapi>=0.115.0

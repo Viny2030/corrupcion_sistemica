@@ -20,7 +20,33 @@ abajo), sin que este servicio dependa de ese hub para funcionar.
 ```
 corrupcion_sistemica/
 ├── .github/workflows/scrapers_diarios.yml   Cron diario (GitHub Actions)
-├── api/main.py                   API REST autónoma (FastAPI) + scheduler interno
+├── api/
+│   ├── main.py                   API REST autónoma (FastAPI) + scheduler interno + endpoints heredados
+│   └── v1/                       /api/v1/* — superficie nueva organizada por recurso
+│       ├── contratos.py          GET /api/v1/contratos, /contratos/{bloque}
+│       ├── empresas.py           GET /api/v1/empresas, /empresas/{identificador}
+│       ├── redes.py              GET /api/v1/redes, /redes/empresa/{identificador}
+│       ├── patrones.py           GET /api/v1/patrones, /patrones/reglas
+│       ├── riesgo.py             GET /riesgo/empresa/{id}, POST /riesgo/ircs
+│       ├── documentos.py         POST /api/v1/documentos/procesar — NER sobre texto real (Boletín Oficial u otro)
+│       └── alertas.py            GET /api/v1/alertas
+├── schemas/                      Contratos Pydantic de entrada/salida de la API
+├── models/                       Modelos de dominio interno (mirror de db/schema.sql, no ORM todavía)
+├── services/                     Capa de servicios entre api/v1/ y analytics/
+│   ├── concentration_service.py  Motor de concentración: HHI + Top3/Top5/por categoría/evolución temporal
+│   ├── network_service.py        Motor de redes: degree/betweenness/closeness/PageRank/comunidad + network_score
+│   ├── pattern_service.py        Motor de patrones: REGLA-001 a REGLA-008, explicables
+│   ├── risk_service.py           Índice IRCS: combina concentración+redes+patrones+anomalías+opacidad+institucional
+│   ├── nlp_service.py            NER híbrido (spaCy + regex) sobre texto real: personas/empresas/organismos/CUIT/montos/expedientes
+│   └── data_store.py             Lectura del último dashboard/data.json
+├── ml/                            Motor A — anomalías con ML no supervisado
+│   ├── isolation_forest.py       Isolation Forest sobre monto/ofertas/duración/modificaciones
+│   ├── clustering.py             Local Outlier Factor + DBSCAN
+│   └── scoring.py                Combina los 3 modelos (0.4/0.4/0.2) en anomaly_score 0-100 + factores explicativos
+├── database/                      Persistencia real en Postgres (además de dashboard/data.json)
+│   ├── connection.py             Motor/sesión SQLAlchemy perezosos + verificar_conexion() (nunca rompe el pipeline)
+│   ├── models.py                 ORM SQLAlchemy 2.0 de las 15 tablas de db/schema.sql
+│   └── repositories.py           Upserts idempotentes (entidad/licitación/indicador) + historial (aristas/scores)
 ├── Dockerfile / railway.json     Despliegue en Railway
 ├── config/settings.py          Endpoints reales y configuración de BD
 ├── db/schema.sql                Esquema PostgreSQL del grafo multipartito
@@ -35,14 +61,22 @@ corrupcion_sistemica/
 │   ├── meaci_compliance.py      Carga de auditorías de compliance (export real)
 │   └── _browser.py              Helper Playwright compartido por los scrapers SPA
 ├── scripts/inspeccionar_selectores.py   Vuelca el HTML real renderizado para calibrar selectores
-├── analytics/                   Los 4 módulos analíticos + scoring/XAI
-├── pipeline.py                  Orquestador: ingesta -> análisis -> dashboard/data.json
+├── analytics/                   Los 4 módulos analíticos + scoring/XAI (capas originales)
+├── pipeline.py                  Orquestador: ingesta -> análisis (analytics/ + services/) -> dashboard/data.json
 ├── dashboard/index.html         Dashboard interactivo (autocontenido)
 ├── tests/test_analytics.py      Verificación de fórmulas (HHI, betweenness, etc.)
+├── tests/test_pattern_service.py Verificación de las 8 reglas del motor de patrones
+├── tests/test_risk_service.py   Verificación del cálculo del IRCS
+├── tests/test_api_v1.py         Contrato HTTP de /api/v1/*
+├── tests/test_ml_scoring.py     Verificación del Motor A (Isolation Forest/LOF/DBSCAN + fallback heurístico)
+├── tests/test_nlp_service.py    Verificación del NER híbrido (spaCy + regex) sobre texto real
+├── tests/test_database.py       Verificación del ORM/repositorios contra un Postgres real con db/schema.sql aplicado
 ├── tests/test_scrapers.py       Parseo de BORA/HCDN/Senado/SAIJ contra fixtures locales
 ├── tests/fixtures/*.html         HTML de prueba (no son descargas reales) para los tests de scrapers
 └── docker-compose.yml           Postgres + PostGIS para levantar el esquema
 ```
+
+`graph/` (exportación a Neo4j) es arquitectura objetivo pero todavía no forma parte de este repo — ver "Limitaciones y próximos pasos". El resto de la arquitectura propuesta originalmente (Motor A de ML, NLP sobre el Boletín Oficial, persistencia real en Postgres) ya está implementado, ver las secciones siguientes.
 
 ## Principio de diseño: nada de datos simulados
 
@@ -63,9 +97,19 @@ demo. El `dashboard/data.json` de ejemplo incluido solo contiene:
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium   # scrapers SPA: BORA/HCDN/Senado/SAIJ
+python -m spacy download es_core_news_sm   # modelo NER en español (services/nlp_service.py)
 cp .env.example .env   # editar credenciales de Postgres
 docker compose up -d   # levanta Postgres+PostGIS con el esquema ya aplicado
 ```
+
+La persistencia en Postgres (`database/`) es **opcional**: si no hay
+conexión disponible (no corriste `docker compose up -d`, o no configuraste
+`PG_HOST`/`PG_PORT`/`PG_DB`/`PG_USER`/`PG_PASSWORD` en `config/settings.py`
+o el entorno), `pipeline.py` lo detecta con
+`database.connection.verificar_conexion()`, loguea una advertencia y sigue
+funcionando igual — solo con `dashboard/data.json` como salida, misma
+filosofía que la ingesta de indicadores macro cayendo a valores de
+referencia si la API del Banco Mundial no responde.
 
 ## Uso
 
@@ -75,6 +119,10 @@ python pipeline.py
 
 # Con tus propios datos reales de contrataciones
 python pipeline.py --ofertas ofertas.csv --licitaciones licitaciones.csv --adendas adendas.csv
+
+# --entidades es opcional: solo hace falta para REGLA-004/REGLA-005 del
+# motor de patrones (mismo domicilio / mismo representante técnico)
+python pipeline.py --licitaciones licitaciones.csv --entidades entidades.csv
 
 # Abrir el dashboard
 open dashboard/index.html   # o servirlo: python -m http.server --directory dashboard
@@ -116,6 +164,139 @@ pytest -q   # corre las verificaciones de fórmulas + parsers de scrapers
 **Scoring/XAI** — `analytics/scoring.py`
 - Score de riesgo 0-100 por licitación/empresa con "Audit Card" (desglose
   transparente de qué reglas y sobre qué dato real se activaron).
+
+## Motor de concentración y motor de redes — `services/`
+
+`services/concentration_service.py` extiende `analytics/finanzas.hhi_por_organismo`
+(que ya calcula HHI y proveedor dominante) con concentración Top 3, Top 5,
+por categoría/rubro y evolución temporal, sin duplicar el cálculo de
+cuotas de mercado. `services/network_service.py` extiende
+`analytics/sna.py` (que ya calcula betweenness y comunidades Louvain) con
+degree, closeness y PageRank, y arma un `network_score` 0-100 por
+entidad, combinación ponderada y documentada (no una caja negra).
+
+## Motor de patrones — `services/pattern_service.py`
+
+Ocho reglas de negocio explicables sobre licitaciones/ofertas/adendas/
+entidades reales (peso máximo combinado: 100 puntos):
+
+| Regla | Qué detecta | Peso |
+|---|---|---|
+| REGLA-001 | Proveedor concentra > 50% del gasto del organismo | 20 |
+| REGLA-002 | Cantidad de ofertas = 1 (sin competencia real) | 15 |
+| REGLA-003 | Empresa gana repetidamente al mismo organismo | 15 |
+| REGLA-004 | Mismo domicilio entre empresas oferentes | 10 |
+| REGLA-005 | Mismo representante técnico/apoderado | 10 |
+| REGLA-006 | Contratos consecutivos al mismo organismo en ventanas cortas | 10 |
+| REGLA-007 | Incremento contractual atípico (low-balling vía adendas) | 10 |
+| REGLA-008 | Concentración elevada + baja competencia | 10 |
+
+Cada regla solo se activa si hay evidencia real en los datos provistos
+(ver `services/pattern_service.construir_tabla_patrones`); si falta una
+tabla completa (ej. no se subió `entidades.csv`), las reglas que dependen
+de ella no se activan, en vez de asumírseles un valor.
+
+## Índice IRCS — `services/risk_service.py`
+
+Índice de Riesgo de Corrupción Sistémica, 0-100, por licitación/empresa:
+
+```
+IRCS = 20% anomalías + 20% concentración + 20% redes
+     + 15% patrones + 15% opacidad + 10% institucional
+```
+
+Cada componente sale de un cálculo real ya hecho por otro módulo (HHI,
+`network_score`, `score_patrones`, % de campos clave publicados, CPI/WGI
+reales ya ingeridos, y el **Motor A** para anomalías — ver más abajo). El
+componente que no tenga evidencia real disponible se excluye del cálculo
+y los pesos se redistribuyen proporcionalmente entre los disponibles, en
+vez de asumírsele un valor neutro.
+
+**Importante:** el IRCS es un score de **riesgo**, no una acusación ni
+una prueba de delito. Señala dónde mirar con más atención; la
+responsabilidad la determina una investigación real, no un algoritmo.
+
+## Motor A — Anomalías con ML no supervisado (`ml/`)
+
+`services/risk_service.componente_anomalias()` intenta primero el Motor A
+real (`ml/scoring.py`), y si scikit-learn no está instalado o hay menos
+de `ml.isolation_forest.MIN_FILAS` licitaciones para entrenar, cae de
+forma transparente a la heurística estadística anterior (z-score sobre
+el monto adjudicado) — misma filosofía de fallback documentado que el
+resto del sistema, nunca falla en silencio ni inventa un score.
+
+El Motor A combina 3 modelos no supervisados de scikit-learn sobre
+`monto_adjudicado`, `cantidad_ofertas`, `duracion`, `modificaciones` y
+`proveedor_participacion`:
+
+```
+anomaly_score = 100 × (0.4 × IsolationForest + 0.4 × LOF + 0.2 × DBSCAN-outlier)
+```
+
+Como los modelos de ML no son inherentemente explicables, `ml/scoring.py`
+agrega **factores** post-hoc (ej. `"monto_atipico"`, `"duracion_atipica"`)
+calculados con z-score sobre cada feature individual, para que cada score
+alto tenga una razón auditable y no sea una caja negra.
+
+## NLP sobre el Boletín Oficial (`services/nlp_service.py`)
+
+Extracción de entidades nombradas sobre texto real (hoy vía
+`POST /api/v1/documentos/procesar`; pensado para el texto de avisos que
+trae `ingestion/bora_boletin.py`). Enfoque híbrido, decidido tras probar
+el modelo chico de spaCy en español contra texto legal/administrativo
+real:
+
+- **PERSONA**: spaCy (`es_core_news_sm`) — funciona bien en este dominio.
+- **EMPRESA** y **ORGANISMO**: regex/heurística por palabras clave
+  (sufijos legales S.A./S.R.L./S.A.S./S.A.C.I./S.C.A./U.T.E.; listado de
+  organismos públicos y siglas conocidas), porque el modelo chico de
+  spaCy confunde sistemáticamente ORG con LOC en este tipo de texto —
+  se documenta la decisión en `services/nlp_service.py`.
+- **CUIT, montos ($ / ARS) y expedientes** (`EX-YYYY-NNNNNNNN-...`):
+  regex determinístico, no depende de ningún modelo.
+
+Si spaCy o el modelo en español no están instalados, la extracción de
+PERSONA cae a `[]` en vez de romper el resto del endpoint (mismo patrón
+de degradación explícita que el resto del sistema); el campo
+`motor_personas` de la respuesta indica qué motor se usó realmente.
+
+**Alcance de esta pieza:** no incluye scraping del cuerpo completo de
+avisos de BORA todavía (ver "Limitaciones y próximos pasos"); tampoco
+persiste las entidades extraídas — no se agregó una tabla nueva a
+`db/schema.sql` sin que sea una decisión explícita del equipo (ver
+sección de Persistencia).
+
+## Persistencia real en Postgres (`database/`)
+
+Además de `dashboard/data.json`, cada corrida de `pipeline.py` puede
+persistir en el Postgres real de `db/schema.sql` (ORM SQLAlchemy 2.0 en
+`database/models.py`, mapeado 1:1 a las 15 tablas del esquema):
+
+- **Entidades** (`entidad`): upsert por `identificador_fiscal` si está
+  disponible, si no por `(nombre, tipo)` — un organismo/empresa no se
+  duplica entre corridas sucesivas sobre el mismo CSV.
+- **Licitaciones** (`licitacion`): upsert idempotente por
+  `fuente_id_externo` (el `licitacion_id` del CSV) — se actualiza in
+  place, no se duplica.
+- **Indicadores macro** (`indicador_macro`): upsert idempotente por
+  `(pais_iso3, anio, indicador)`.
+- **Aristas del grafo** (`grafo_arista`) y **scores de riesgo**
+  (`score_riesgo`): **no** son idempotentes a propósito — cada corrida
+  agrega filas nuevas, para que quede un historial real de cómo
+  evolucionó la red y el IRCS entre corridas sucesivas (limitación
+  conocida: `grafo_arista` no tiene una clave natural única en el
+  esquema actual para deduplicar sin una migración).
+
+Si no hay conexión a Postgres disponible, el pipeline lo detecta con
+`database.connection.verificar_conexion()` y sigue funcionando igual solo
+con `dashboard/data.json` — nunca se cae por esto (ver "Instalación").
+
+**Alcance de esta fase:** el foco fue que el pipeline escriba en Postgres
+de forma correcta e idempotente donde corresponde. Los endpoints de
+lectura de `/api/v1/*` siguen leyendo del último `dashboard/data.json`
+(vía `services/data_store.py`), no consultan Postgres directamente
+todavía — eso queda para una fase siguiente si hace falta servir
+histórico completo por API en vez de solo la última corrida.
 
 ## Fuentes reales utilizadas
 
@@ -231,10 +412,28 @@ El proyecto corre como servicio Docker independiente. En Railway:
 |---|---|---|
 | GET | `/health` | Healthcheck (Railway) |
 | GET | `/indicadores/macro` | CPI / WGI reales (filtrable por `pais_iso3`, `indicador`) |
-| GET | `/procurement/{bloque}` | co_presentismo, asimetria_victorias, hhi_por_organismo, low_balling |
-| GET | `/scoring/reglas` | Reglas de scoring vigentes (transparencia del modelo) |
+| GET | `/procurement/{bloque}` | co_presentismo, asimetria_victorias, hhi_por_organismo, low_balling, ... |
+| GET | `/scoring/reglas` | Reglas de scoring vigentes (`analytics/scoring.py`, transparencia del modelo) |
 | POST | `/scoring/evaluar` | Score + audit card para una fila de indicadores real |
-| POST | `/pipeline/ejecutar` | Dispara una corrida manual (acepta CSV reales por multipart) |
+| POST | `/pipeline/ejecutar` | Dispara una corrida manual (acepta CSV reales por multipart, incl. `entidades`) |
+
+Endpoints nuevos, organizados por recurso bajo `/api/v1` (no reemplazan a
+los de arriba, que se mantienen por compatibilidad hacia atrás):
+
+| Método | Ruta | Uso |
+|---|---|---|
+| GET | `/api/v1/contratos` | Todos los bloques calculados (HHI, Top3/Top5, low-balling, redes, patrones, riesgo_ircs, ...) |
+| GET | `/api/v1/contratos/{bloque}` | Un bloque puntual (404 si el nombre no existe) |
+| GET | `/api/v1/empresas` | Lista de proveedores con IRCS calculado |
+| GET | `/api/v1/empresas/{identificador}` | Vista consolidada de una empresa (contrataciones + riesgo + detalle) |
+| GET | `/api/v1/redes` | Métricas de red de todas las entidades del grafo de adjudicaciones |
+| GET | `/api/v1/redes/empresa/{identificador}` | degree/betweenness/closeness/PageRank/comunidad/`network_score` de una entidad |
+| GET | `/api/v1/patrones/reglas` | Las 8 reglas vigentes del motor de patrones |
+| GET | `/api/v1/patrones` | Resultado de las 8 reglas sobre la última corrida |
+| POST | `/api/v1/riesgo/ircs` | Calcula el IRCS a partir de los 6 componentes que se le pasen |
+| GET | `/api/v1/riesgo/empresa/{identificador}` | IRCS máximo observado para una empresa |
+| GET | `/api/v1/alertas` | Alertas explicables derivadas de patrones + IRCS (código, descripción, severidad) |
+| POST | `/api/v1/documentos/procesar` | NER (personas/empresas/organismos/CUIT/montos/expedientes) sobre texto real |
 
 ## Limitaciones y próximos pasos
 
@@ -248,6 +447,27 @@ El proyecto corre como servicio Docker independiente. En Railway:
 - **NLP judicial**: `analytics/judicial_nlp.py` usa una heurística léxica
   transparente y auditable como punto de partida; para producción se
   recomienda un modelo entrenado sobre un corpus real de fallos etiquetado.
+- **NLP sobre el Boletín Oficial — cuerpo completo de avisos**: el
+  NER (`services/nlp_service.py`) ya funciona sobre cualquier texto real
+  vía `POST /api/v1/documentos/procesar`; lo que falta es que
+  `ingestion/bora_boletin.py` traiga el texto completo de cada aviso (hoy
+  trae metadatos/listado) para correr el NER automáticamente sobre cada
+  publicación nueva y persistir las entidades extraídas — eso último
+  requeriría además una tabla nueva en `db/schema.sql`, que no se agregó
+  unilateralmente en esta fase (ver "Persistencia real en Postgres").
+- **API de lectura vs. Postgres**: `pipeline.py` ya persiste en Postgres
+  (entidades, licitaciones, aristas, scores, indicadores macro — ver
+  "Persistencia real en Postgres"), pero los endpoints de `/api/v1/*`
+  todavía leen del último `dashboard/data.json` en vez de consultar la
+  base directamente; migrarlos daría acceso al histórico completo entre
+  corridas (hoy solo se ve la última) en vez de un snapshot.
+- **Grafo de aristas sin clave natural**: `grafo_arista` no tiene una
+  columna única en `db/schema.sql` para deduplicar contra corridas
+  anteriores sin una migración; por diseño, `persistir_grafo_aristas`
+  inserta una fila nueva por corrida (queda como historial), pero eso
+  significa que la tabla crece sin límite si el pipeline corre muy
+  seguido — considerar una migración con `(origen_id, destino_id,
+  tipo_relacion, corrida_id)` si se vuelve un problema de volumen.
 - **Integración con el hub Mapa de Transparencia**: este repo expone la
   API lista para ser consumida, pero la integración en sí (autenticación
   entre servicios, formato exacto que espera el hub, etc.) queda pendiente

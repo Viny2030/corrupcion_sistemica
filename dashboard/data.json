@@ -1,5 +1,5 @@
 {
-  "generado_en": "2026-08-09T20:54:38.618786+00:00",
+  "generado_en": "2026-08-16T21:18:53.670598+00:00",
   "indicadores_macro": [
     {
       "pais_iso3": "ARG",
@@ -46,6 +46,30 @@
     "low_balling": {
       "disponible": false,
       "datos": []
+    },
+    "concentracion_top3": {
+      "disponible": false,
+      "datos": []
+    },
+    "concentracion_top5": {
+      "disponible": false,
+      "datos": []
+    },
+    "redes": {
+      "disponible": false,
+      "datos": []
+    },
+    "patrones": {
+      "disponible": false,
+      "datos": []
+    },
+    "anomalias": {
+      "disponible": false,
+      "datos": []
+    },
+    "riesgo_ircs": {
+      "disponible": false,
+      "datos": []
     }
   },
   "reglas_scoring": [
@@ -72,6 +96,56 @@
     {
       "regla": "COMPLIANCE_DE_PAPEL",
       "descripcion": "Programa de integridad declarado sin efectividad real verificada",
+      "peso_maximo": 10.0
+    }
+  ],
+  "reglas_patrones": [
+    {
+      "codigo": "REGLA-001",
+      "regla": "CONCENTRACION_PROVEEDOR",
+      "descripcion": "El proveedor concentra más del 50% del gasto adjudicado del organismo",
+      "peso_maximo": 20.0
+    },
+    {
+      "codigo": "REGLA-002",
+      "regla": "OFERTA_UNICA",
+      "descripcion": "La licitación recibió una sola oferta (ausencia de competencia real)",
+      "peso_maximo": 15.0
+    },
+    {
+      "codigo": "REGLA-003",
+      "regla": "GANADOR_REPETIDO",
+      "descripcion": "La misma empresa gana repetidamente licitaciones del mismo organismo",
+      "peso_maximo": 15.0
+    },
+    {
+      "codigo": "REGLA-004",
+      "regla": "MISMO_DOMICILIO",
+      "descripcion": "Empresas oferentes comparten domicilio fiscal declarado",
+      "peso_maximo": 10.0
+    },
+    {
+      "codigo": "REGLA-005",
+      "regla": "MISMO_REPRESENTANTE",
+      "descripcion": "Empresas oferentes comparten representante técnico/apoderado",
+      "peso_maximo": 10.0
+    },
+    {
+      "codigo": "REGLA-006",
+      "regla": "CONTRATOS_CONSECUTIVOS",
+      "descripcion": "La empresa recibe adjudicaciones consecutivas del mismo organismo en ventanas cortas",
+      "peso_maximo": 10.0
+    },
+    {
+      "codigo": "REGLA-007",
+      "regla": "INCREMENTO_ATIPICO",
+      "descripcion": "El monto final vía adendas se desvía atípicamente del monto adjudicado",
+      "peso_maximo": 10.0
+    },
+    {
+      "codigo": "REGLA-008",
+      "regla": "CONCENTRACION_Y_BAJA_COMPETENCIA",
+      "descripcion": "Alta concentración (HHI > 2500) combinada con baja competencia (promedio de ofertas del organismo <= 1.5)",
       "peso_maximo": 10.0
     }
   ]

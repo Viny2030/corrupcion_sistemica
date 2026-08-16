@@ -29,18 +29,32 @@
   th{color:var(--muted);font-weight:600;}
   .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;}
   .badge.pendiente{background:#3a2a12;color:var(--warn);}
+  .badge.alto{background:#3a1418;color:var(--danger);}
+  .badge.medio{background:#3a2a12;color:var(--warn);}
+  .badge.bajo{background:#123a2e;color:var(--accent);}
   .vacio{color:var(--muted);font-size:13px;line-height:1.6;padding:8px 0;}
   .vacio code{background:var(--panel2);padding:2px 6px;border-radius:4px;color:var(--accent);}
   .fuente{color:var(--muted);font-size:11px;margin-top:10px;}
   .full{grid-column:1/-1;}
   canvas{max-height:220px;}
+  .regla-chip{display:inline-block;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 8px;margin:2px 4px 2px 0;font-size:11px;color:var(--text);white-space:nowrap;}
+  .regla-chip b{color:var(--accent);}
+  .ircs-row{display:flex;align-items:flex-start;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);}
+  .ircs-row:last-child{border-bottom:none;}
+  .ircs-score{font-size:22px;font-weight:700;min-width:52px;text-align:center;}
+  .ircs-meta{flex:1;font-size:12px;color:var(--muted);}
+  .ircs-meta strong{color:var(--text);}
+  .ircs-componentes{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;}
+  .ircs-componentes span{background:var(--panel2);border-radius:5px;padding:2px 6px;font-size:10px;color:var(--muted);}
+  .disclaimer{background:#1b2438;border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:16px;}
+  .disclaimer strong{color:var(--text);}
 </style>
 </head>
 <body>
 
 <header>
   <h1>Mapa de Transparencia — Módulo de Corrupción Sistémica</h1>
-  <p>Dashboard interactivo sobre datos reales (CPI / WGI) y motor analítico de las 4 capas (SNA, Finanzas, Conductual, Judicial). Regenerar con <code>python pipeline.py</code>.</p>
+  <p>Dashboard interactivo sobre datos reales (CPI / WGI) y motor analítico de las 4 capas (SNA, Finanzas, Conductual, Judicial), más los motores de concentración, redes, patrones, anomalías (ML) e Índice IRCS. Regenerar con <code>python pipeline.py</code>.</p>
 </header>
 
 <main id="app"></main>
@@ -64,7 +78,13 @@ const DATA_EMBEBIDA = {
     "co_presentismo": { "disponible": false, "datos": [] },
     "asimetria_victorias": { "disponible": false, "datos": [] },
     "hhi_por_organismo": { "disponible": false, "datos": [] },
-    "low_balling": { "disponible": false, "datos": [] }
+    "low_balling": { "disponible": false, "datos": [] },
+    "concentracion_top3": { "disponible": false, "datos": [] },
+    "concentracion_top5": { "disponible": false, "datos": [] },
+    "redes": { "disponible": false, "datos": [] },
+    "patrones": { "disponible": false, "datos": [] },
+    "anomalias": { "disponible": false, "datos": [] },
+    "riesgo_ircs": { "disponible": false, "datos": [] }
   },
   "reglas_scoring": [
     { "regla": "HHI_ELEVADO", "descripcion": "Alta concentración presupuestaria en el organismo (HHI > 2500)", "peso_maximo": 30.0 },
@@ -72,6 +92,16 @@ const DATA_EMBEBIDA = {
     { "regla": "COBRO_VELOZ_TGN", "descripcion": "Priorización de pago frente al promedio del organismo", "peso_maximo": 20.0 },
     { "regla": "ALTERNANCIA_SOSPECHOSA", "descripcion": "Alternancia de victorias con co-presentismo alto", "peso_maximo": 15.0 },
     { "regla": "COMPLIANCE_DE_PAPEL", "descripcion": "Programa de integridad sin efectividad real verificada", "peso_maximo": 10.0 }
+  ],
+  "reglas_patrones": [
+    { "codigo": "REGLA-001", "regla": "CONCENTRACION_PROVEEDOR", "descripcion": "El proveedor concentra más del 50% del gasto adjudicado del organismo", "peso_maximo": 20.0 },
+    { "codigo": "REGLA-002", "regla": "OFERTA_UNICA", "descripcion": "La licitación recibió una sola oferta (ausencia de competencia real)", "peso_maximo": 15.0 },
+    { "codigo": "REGLA-003", "regla": "GANADOR_REPETIDO", "descripcion": "La misma empresa gana repetidamente licitaciones del mismo organismo", "peso_maximo": 15.0 },
+    { "codigo": "REGLA-004", "regla": "MISMO_DOMICILIO", "descripcion": "Empresas oferentes comparten domicilio fiscal declarado", "peso_maximo": 10.0 },
+    { "codigo": "REGLA-005", "regla": "MISMO_REPRESENTANTE", "descripcion": "Empresas oferentes comparten representante técnico/apoderado", "peso_maximo": 10.0 },
+    { "codigo": "REGLA-006", "regla": "CONTRATOS_CONSECUTIVOS", "descripcion": "La empresa recibe adjudicaciones consecutivas del mismo organismo en ventanas cortas", "peso_maximo": 10.0 },
+    { "codigo": "REGLA-007", "regla": "INCREMENTO_ATIPICO", "descripcion": "El monto final vía adendas se desvía atípicamente del monto adjudicado", "peso_maximo": 10.0 },
+    { "codigo": "REGLA-008", "regla": "CONCENTRACION_Y_BAJA_COMPETENCIA", "descripcion": "Alta concentración (HHI > 2500) combinada con baja competencia (promedio de ofertas del organismo <= 1.5)", "peso_maximo": 10.0 }
   ]
 };
 
@@ -130,6 +160,8 @@ function render(data) {
       <div class="fuente">Fuente: ${wgiUltimo ? wgiUltimo.fuente : 'World Bank WGI'}</div>
     </div>
 
+    ${renderPanelIRCS(data.procurement.riesgo_ircs, '--licitaciones licitaciones.csv --ofertas ofertas.csv --adendas adendas.csv --entidades entidades.csv')}
+
     <div class="card full">
       <h2>Motor de Scoring de Riesgo — Reglas y Explicabilidad (XAI)</h2>
       <table>
@@ -143,10 +175,28 @@ function render(data) {
       <div class="fuente">Cada alerta muestra su "Audit Card": el desglose exacto de qué reglas y sobre qué datos reales se activó (ver analytics/scoring.py).</div>
     </div>
 
+    <div class="card full">
+      <h2>Motor de Patrones — Catálogo de reglas (REGLA-001 a REGLA-008)</h2>
+      <table>
+        <thead><tr><th>Código</th><th>Regla</th><th>Descripción</th><th>Peso máx.</th></tr></thead>
+        <tbody>
+          ${(data.reglas_patrones || []).map(r => `
+            <tr><td>${r.codigo}</td><td>${r.regla}</td><td>${r.descripcion}</td><td>${r.peso_maximo}</td></tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <div class="fuente">Se evalúan sobre licitaciones/ofertas/adendas/entidades reales (ver services/pattern_service.py); REGLA-004/005 necesitan además <code>--entidades</code>.</div>
+    </div>
+
     ${renderPanelProcurement('Capa 1 — Co-presentismo / Rotación de ofertas', data.procurement.co_presentismo, '--ofertas ofertas.csv')}
     ${renderPanelProcurement('Capa 1 — Asimetría de victorias', data.procurement.asimetria_victorias, '--ofertas ofertas.csv')}
     ${renderPanelProcurement('Capa 2 — HHI por organismo', data.procurement.hhi_por_organismo, '--licitaciones licitaciones.csv')}
     ${renderPanelProcurement('Capa 2 — Low-balling index (adendas)', data.procurement.low_balling, '--licitaciones licitaciones.csv --adendas adendas.csv')}
+    ${renderPanelProcurement('Motor de Concentración — Top 3 proveedores por organismo', data.procurement.concentracion_top3, '--licitaciones licitaciones.csv')}
+    ${renderPanelProcurement('Motor de Concentración — Top 5 proveedores por organismo', data.procurement.concentracion_top5, '--licitaciones licitaciones.csv')}
+    ${renderPanelProcurement('Motor de Redes — Centralidad de organismos y proveedores', data.procurement.redes, '--licitaciones licitaciones.csv')}
+    ${renderPanelAnomalias(data.procurement.anomalias, '--licitaciones licitaciones.csv --ofertas ofertas.csv --adendas adendas.csv')}
+    ${renderPanelPatrones(data.procurement.patrones, '--licitaciones licitaciones.csv --ofertas ofertas.csv --adendas adendas.csv --entidades entidades.csv')}
   `;
 
   new Chart(document.getElementById('chartCpi'), {
@@ -190,6 +240,110 @@ function renderPanelProcurement(titulo, bloque, comando) {
         <code>python pipeline.py ${comando}</code><br><br>
         y volvé a abrir este dashboard.
       </div>
+    </div>`;
+}
+
+function renderPanelIRCS(bloque, comando) {
+  if (!(bloque && bloque.disponible && bloque.datos && bloque.datos.length)) {
+    return `
+    <div class="card full">
+      <h2>Índice IRCS — Riesgo de Corrupción Sistémica <span class="badge pendiente">esperando datos reales</span></h2>
+      <div class="disclaimer">
+        <strong>Esto es un score de riesgo, no una acusación.</strong> El IRCS combina 6 señales estadísticas reales
+        (20% anomalías + 20% concentración + 20% redes + 15% patrones + 15% opacidad + 10% institucional) para priorizar
+        dónde mirar con más atención. Un IRCS alto no prueba un delito — eso lo determina una investigación real.
+      </div>
+      <div class="vacio">
+        Se completa con tus propios datos reales de contrataciones. Corré:<br><br>
+        <code>python pipeline.py ${comando}</code><br><br>
+        y volvé a abrir este dashboard.
+      </div>
+    </div>`;
+  }
+  const filas = bloque.datos.slice(0, 20);
+  return `
+    <div class="card full">
+      <h2>Índice IRCS — Riesgo de Corrupción Sistémica (top ${filas.length} de ${bloque.datos.length})</h2>
+      <div class="disclaimer">
+        <strong>Esto es un score de riesgo, no una acusación.</strong> El IRCS combina 6 señales estadísticas reales
+        (20% anomalías + 20% concentración + 20% redes + 15% patrones + 15% opacidad + 10% institucional) para priorizar
+        dónde mirar con más atención. Un IRCS alto no prueba un delito — eso lo determina una investigación real.
+      </div>
+      ${filas.map(f => `
+        <div class="ircs-row">
+          <div class="ircs-score">${f.ircs}</div>
+          <div class="ircs-meta">
+            <span class="badge ${String(f.nivel_ircs || '').toLowerCase()}">${f.nivel_ircs}</span>
+            <strong>${f.licitacion_id}</strong>${f.organismo ? ' — ' + f.organismo : ''}${f.proveedor ? ' → ' + f.proveedor : ''}
+            <div class="ircs-componentes">
+              ${Object.entries(f.ircs_componentes || {}).map(([k, v]) => `<span>${k}: ${v ?? '—'}</span>`).join('')}
+            </div>
+          </div>
+        </div>`).join('')}
+      <div class="fuente">Ver services/risk_service.py para el detalle de cada componente y la redistribución de pesos cuando falta evidencia real.</div>
+    </div>`;
+}
+
+function renderPanelPatrones(bloque, comando) {
+  if (!(bloque && bloque.disponible && bloque.datos && bloque.datos.length)) {
+    return `
+    <div class="card">
+      <h2>Motor de Patrones — Reglas activadas por licitación <span class="badge pendiente">esperando datos reales</span></h2>
+      <div class="vacio">
+        Evalúa las 8 reglas del catálogo (ver tabla más arriba) sobre cada licitación. Corré:<br><br>
+        <code>python pipeline.py ${comando}</code>
+      </div>
+    </div>`;
+  }
+  const filas = [...bloque.datos].sort((a, b) => (b.score_patrones ?? 0) - (a.score_patrones ?? 0)).slice(0, 15);
+  return `
+    <div class="card full">
+      <h2>Motor de Patrones — Reglas activadas por licitación</h2>
+      <table>
+        <thead><tr><th>Licitación</th><th>Organismo</th><th>Proveedor</th><th>Score</th><th>Reglas activadas</th></tr></thead>
+        <tbody>
+          ${filas.map(f => `
+            <tr>
+              <td>${f.licitacion_id}</td>
+              <td>${f.organismo ?? ''}</td>
+              <td>${f.proveedor ?? ''}</td>
+              <td>${f.score_patrones ?? '—'}</td>
+              <td>${Object.entries(f.reglas_activadas || {}).map(([cod, r]) => `<span class="regla-chip"><b>${cod}</b> ${r.nombre}</span>`).join('') || '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderPanelAnomalias(bloque, comando) {
+  if (!(bloque && bloque.disponible && bloque.datos && bloque.datos.length)) {
+    return `
+    <div class="card">
+      <h2>Motor A — Anomalías (ML) <span class="badge pendiente">esperando datos reales</span></h2>
+      <div class="vacio">
+        Isolation Forest + LOF + DBSCAN sobre monto/plazos/ofertas/modificaciones (cae a heurístico z-score
+        transparente si hay pocas licitaciones para entrenar). Corré:<br><br>
+        <code>python pipeline.py ${comando}</code>
+      </div>
+    </div>`;
+  }
+  const filas = [...bloque.datos].sort((a, b) => (b.anomaly_score ?? 0) - (a.anomaly_score ?? 0)).slice(0, 15);
+  return `
+    <div class="card">
+      <h2>Motor A — Anomalías (ML)</h2>
+      <table>
+        <thead><tr><th>Licitación</th><th>Score</th><th>Nivel</th><th>Factores</th></tr></thead>
+        <tbody>
+          ${filas.map(f => `
+            <tr>
+              <td>${f.licitacion_id}</td>
+              <td>${f.anomaly_score}</td>
+              <td><span class="badge ${String(f.nivel || '').toLowerCase()}">${f.nivel}</span></td>
+              <td>${(f.factores || []).join(', ') || '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <div class="fuente">Isolation Forest + Local Outlier Factor + DBSCAN (ver ml/scoring.py); los "factores" son explicabilidad post-hoc por z-score.</div>
     </div>`;
 }
 

@@ -26,6 +26,7 @@ import pandas as pd
 from analytics import finanzas, scoring, sna
 from ingestion.wgi_worldbank import ConectorWGI
 from config.settings import SETTINGS
+from services import concentration_service, network_service, pattern_service, risk_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("corrupcion_sistemica.pipeline")
@@ -46,6 +47,53 @@ WGI_REFERENCIA_REAL = [
 ]
 
 
+def _persistir_procurement_en_postgres(
+    licitaciones: pd.DataFrame, aristas: pd.DataFrame, tabla_ircs: pd.DataFrame
+) -> None:
+    """Persiste entidades/licitaciones/aristas/scores en Postgres real
+    (`database/`) si hay conexión disponible (ver
+    `database.connection.verificar_conexion()`). Si no la hay, o si algo
+    falla durante la persistencia, se loguea una advertencia y el
+    pipeline sigue solo con `dashboard/data.json` — nunca se cae por
+    esto, misma filosofía que `ingerir_indicadores_macro()` con la API
+    del Banco Mundial. Import perezoso de `database` para no requerir
+    SQLAlchemy/psycopg2 en el path de quien solo usa CSV -> JSON."""
+    from database.connection import sesion, verificar_conexion
+    from database import repositories as db_repo
+
+    if not verificar_conexion():
+        logger.info("Postgres no disponible; se sigue solo con dashboard/data.json.")
+        return
+    try:
+        with sesion() as session:
+            entidades_map = db_repo.upsert_entidades_de_licitaciones(session, licitaciones)
+            licitaciones_map = db_repo.persistir_licitaciones(session, licitaciones, entidades_map)
+            n_aristas = db_repo.persistir_grafo_aristas(session, aristas, entidades_map)
+            n_scores = db_repo.persistir_scores_riesgo(session, tabla_ircs, licitaciones_map)
+        logger.info(
+            "Corrida persistida en Postgres: %s licitaciones, %s aristas, %s scores.",
+            len(licitaciones_map), n_aristas, n_scores,
+        )
+    except Exception as exc:  # noqa: BLE001 — no debe tumbar el pipeline
+        logger.warning("No se pudo persistir en Postgres (%s); se sigue solo con dashboard/data.json.", exc)
+
+
+def _persistir_indicadores_macro_en_postgres(indicadores_macro: list[dict]) -> None:
+    """Igual filosofía que `_persistir_procurement_en_postgres`, pero
+    para los indicadores macro (no depende de que haya licitaciones)."""
+    from database.connection import sesion, verificar_conexion
+    from database import repositories as db_repo
+
+    if not verificar_conexion():
+        return
+    try:
+        with sesion() as session:
+            db_repo.persistir_indicadores_macro(session, indicadores_macro)
+        logger.info("Indicadores macro persistidos en Postgres.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudieron persistir los indicadores macro en Postgres (%s).", exc)
+
+
 def ingerir_indicadores_macro() -> list[dict]:
     """Intenta traer series reales de WGI vía API; si la llamada de red
     falla (sin conectividad, cambio de API, etc.) cae de forma explícita
@@ -64,20 +112,39 @@ def ingerir_indicadores_macro() -> list[dict]:
 
 
 def analizar_procurement(
-    path_ofertas: str | None, path_licitaciones: str | None, path_adendas: str | None
+    path_ofertas: str | None,
+    path_licitaciones: str | None,
+    path_adendas: str | None,
+    path_entidades: str | None = None,
+    indicadores_macro: list[dict] | None = None,
 ) -> dict:
-    """Corre Capa 1 (SNA) y Capa 2 (Finanzas) si el usuario provee sus
-    propios datos reales de contrataciones. Si no se proveen rutas,
-    devuelve `disponible: False` en cada bloque en lugar de simular."""
+    """Corre Capa 1 (SNA) y Capa 2 (Finanzas), más los motores de
+    concentración/redes/patrones/IRCS (`services/`), si el usuario provee
+    sus propios datos reales de contrataciones. Si no se proveen rutas,
+    devuelve `disponible: False` en cada bloque en lugar de simular.
+
+    `path_entidades` es opcional y solo se usa para REGLA-004/REGLA-005
+    del motor de patrones (mismo domicilio / mismo representante); sin
+    él, esas dos reglas simplemente no encuentran evidencia."""
     resultado = {
         "co_presentismo": {"disponible": False, "datos": []},
         "asimetria_victorias": {"disponible": False, "datos": []},
         "hhi_por_organismo": {"disponible": False, "datos": []},
         "low_balling": {"disponible": False, "datos": []},
+        "concentracion_top3": {"disponible": False, "datos": []},
+        "concentracion_top5": {"disponible": False, "datos": []},
+        "redes": {"disponible": False, "datos": []},
+        "patrones": {"disponible": False, "datos": []},
+        "anomalias": {"disponible": False, "datos": []},
+        "riesgo_ircs": {"disponible": False, "datos": []},
     }
 
-    if path_ofertas:
-        ofertas = pd.read_csv(path_ofertas)
+    ofertas = pd.read_csv(path_ofertas) if path_ofertas else None
+    licitaciones = pd.read_csv(path_licitaciones) if path_licitaciones else None
+    adendas = pd.read_csv(path_adendas) if path_adendas else None
+    entidades = pd.read_csv(path_entidades) if path_entidades else None
+
+    if ofertas is not None:
         resultado["co_presentismo"] = {
             "disponible": True,
             "datos": sna.matriz_co_presentismo(ofertas).to_dict("records"),
@@ -87,18 +154,53 @@ def analizar_procurement(
             "datos": sna.asimetria_de_victorias(ofertas).to_dict("records"),
         }
 
-    if path_licitaciones:
-        licitaciones = pd.read_csv(path_licitaciones)
-        resultado["hhi_por_organismo"] = {
+    if licitaciones is not None:
+        tabla_hhi = finanzas.hhi_por_organismo(licitaciones)
+        resultado["hhi_por_organismo"] = {"disponible": True, "datos": tabla_hhi.to_dict("records")}
+        resultado["concentracion_top3"] = {
             "disponible": True,
-            "datos": finanzas.hhi_por_organismo(licitaciones).to_dict("records"),
+            "datos": concentration_service.concentracion_top_n(licitaciones, 3).to_dict("records"),
         }
-        if path_adendas:
-            adendas = pd.read_csv(path_adendas)
+        resultado["concentracion_top5"] = {
+            "disponible": True,
+            "datos": concentration_service.concentracion_top_n(licitaciones, 5).to_dict("records"),
+        }
+
+        if adendas is not None:
             resultado["low_balling"] = {
                 "disponible": True,
                 "datos": finanzas.low_balling_index(licitaciones, adendas).to_dict("records"),
             }
+
+        aristas = network_service.aristas_desde_licitaciones(licitaciones)
+        tabla_redes = network_service.metricas_por_entidad(aristas)
+        resultado["redes"] = {"disponible": not tabla_redes.empty, "datos": tabla_redes.to_dict("records")}
+
+        tabla_patrones = pattern_service.evaluar_patrones(licitaciones, ofertas, adendas, entidades)
+        resultado["patrones"] = {"disponible": not tabla_patrones.empty, "datos": tabla_patrones.to_dict("records")}
+
+        # Motor A (ml/scoring.py: Isolation Forest + LOF + DBSCAN) si hay
+        # licitaciones suficientes para entrenar; si no, cae al
+        # heurístico z-score — ver services/risk_service.componente_anomalias.
+        # Se calcula una sola vez acá y se reusa para el IRCS, en vez de
+        # entrenar el modelo dos veces por corrida.
+        tabla_anomalias = risk_service.componente_anomalias(licitaciones, ofertas, adendas)
+        resultado["anomalias"] = {
+            "disponible": not tabla_anomalias.empty,
+            "datos": tabla_anomalias.to_dict("records"),
+        }
+
+        tabla_ircs = risk_service.calcular_ircs_por_licitacion(
+            licitaciones=licitaciones,
+            concentracion_por_organismo=tabla_hhi,
+            red_por_entidad=tabla_redes,
+            patrones_por_licitacion=tabla_patrones,
+            anomalias_por_licitacion=tabla_anomalias,
+            indicadores_macro=indicadores_macro or [],
+        )
+        resultado["riesgo_ircs"] = {"disponible": not tabla_ircs.empty, "datos": tabla_ircs.to_dict("records")}
+
+        _persistir_procurement_en_postgres(licitaciones, aristas, tabla_ircs)
 
     return resultado
 
@@ -107,6 +209,7 @@ def ejecutar_pipeline(
     path_ofertas: str | None = None,
     path_licitaciones: str | None = None,
     path_adendas: str | None = None,
+    path_entidades: str | None = None,
     persistir: bool = True,
 ) -> dict:
     """Punto de entrada reusable: lo llaman tanto el CLI (`main`) como la
@@ -114,11 +217,16 @@ def ejecutar_pipeline(
     Devuelve el dict de salida y, si `persistir=True`, lo escribe además
     en `dashboard/data.json` (para que el dashboard estático lo lea sin
     necesidad de golpear la API)."""
+    indicadores_macro = ingerir_indicadores_macro()
+    _persistir_indicadores_macro_en_postgres(indicadores_macro)
     salida = {
         "generado_en": pd.Timestamp.now("UTC").isoformat(),
-        "indicadores_macro": ingerir_indicadores_macro(),
-        "procurement": analizar_procurement(path_ofertas, path_licitaciones, path_adendas),
+        "indicadores_macro": indicadores_macro,
+        "procurement": analizar_procurement(
+            path_ofertas, path_licitaciones, path_adendas, path_entidades, indicadores_macro
+        ),
         "reglas_scoring": scoring.explicar_reglas().to_dict("records"),
+        "reglas_patrones": pattern_service.explicar_reglas().to_dict("records"),
     }
 
     if persistir:
@@ -135,8 +243,9 @@ def main() -> None:
     parser.add_argument("--ofertas", help="CSV real de ofertas por licitación (empresa_id, licitacion_id, resultado, ...)")
     parser.add_argument("--licitaciones", help="CSV real de licitaciones/adjudicaciones")
     parser.add_argument("--adendas", help="CSV real de adendas/ampliaciones de monto")
+    parser.add_argument("--entidades", help="CSV real de entidades (domicilio, representante_tecnico, ...) para REGLA-004/REGLA-005")
     args = parser.parse_args()
-    ejecutar_pipeline(args.ofertas, args.licitaciones, args.adendas, persistir=True)
+    ejecutar_pipeline(args.ofertas, args.licitaciones, args.adendas, args.entidades, persistir=True)
 
 
 if __name__ == "__main__":
